@@ -1,41 +1,28 @@
-from argparse import ArgumentParser, BooleanOptionalAction
-from enum import Enum
-import imageio
-import evaluate
+import glob
+import json
 import os
 import pathlib
-import numpy as np
 import tarfile
-from matplotlib import animation
-import matplotlib.pyplot as plt
-from huggingface_hub import hf_hub_download
-from numpy import ndarray
-from torch import Tensor
-import torch
-from transformers import (
-    VideoMAEImageProcessor,
-    VideoMAEForVideoClassification,
-    TrainingArguments,
-    Trainer,
-    pipeline,
-)
-from definitions import ROOT_DIR
+from argparse import ArgumentParser, BooleanOptionalAction
+from enum import Enum
+
+import evaluate
+import imageio
+import numpy as np
 import pytorchvideo.data
+import torch
+from huggingface_hub import hf_hub_download
 from pytorchvideo.data.labeled_video_dataset import LabeledVideoDataset
+from pytorchvideo.transforms import (ApplyTransformToKey, Normalize,
+                                     RandomShortSideScale,
+                                     UniformTemporalSubsample)
+from torchvision.transforms import (Compose, Lambda, RandomCrop,
+                                    RandomHorizontalFlip)
+from transformers import (Trainer, TrainingArguments,
+                          VideoMAEForVideoClassification,
+                          VideoMAEImageProcessor)
 
-from pytorchvideo.transforms import (
-    ApplyTransformToKey,
-    Normalize,
-    RandomShortSideScale,
-    UniformTemporalSubsample,
-)
-
-from torchvision.transforms import (
-    Compose,
-    Lambda,
-    RandomCrop,
-    RandomHorizontalFlip,
-)
+from definitions import ROOT_DIR
 
 
 class Dataset(Enum):
@@ -47,15 +34,71 @@ class Dataset(Enum):
 metric = evaluate.load("accuracy")
 
 
-def main(train_new_model: bool, model_name: str, inference: bool, show_gif: bool):
-    dataset_path = download_hf_dataset()
+def train(
+    model_name: str,
+    base_model: str,
+    use_hf_dataset: bool,
+    dataset_root_path: str | None,
+    epochs: int,
+    batch_size: int,
+):
+    if use_hf_dataset:
+        dataset_path = download_hf_dataset()
 
-    with tarfile.open(dataset_path) as t:
-        extraction_path = f"{ROOT_DIR}/hf_subset"
-        print(f"Extracting hugging face dataset into {extraction_path}")
-        t.extractall(extraction_path)
+        with tarfile.open(dataset_path) as t:
+            extraction_path = f"{ROOT_DIR}/hf_subset"
+            print(f"Extracting hugging face dataset into {extraction_path}")
+            t.extractall(extraction_path)
+            dataset_root_path = pathlib.Path(extraction_path, "UCF101_subset")
 
-    dataset_root_path = pathlib.Path(extraction_path, "UCF101_subset")
+    if dataset_root_path is None:
+        print("No dataset path was set. Aborting...")
+        return
+
+    label2id, id2label = get_label_id_dict(dataset_root_path)
+
+    image_processor, model = load_model(base_model, label2id, id2label)
+    train_ds, val_ds, test_ds = get_datasets(image_processor, model, dataset_root_path)
+
+    print("Start training new model...")
+    train_results = train_model(
+        model=model,
+        image_processor=image_processor,
+        new_model_name=model_name,
+        training_dataset=train_ds,
+        validation_dataset=val_ds,
+        num_epochs=epochs,
+        batch_size=batch_size,
+    )
+
+    report_best_checkpoint(checkpoint_dirs=glob.glob(f"{model_name}/checkpoint-*"))
+
+
+def report_best_checkpoint(checkpoint_dirs: list[str]):
+    best_accuracy = 0
+    best_checkpoint = None
+
+    for checkpoint_dir in checkpoint_dirs:
+        state_file = os.path.join(checkpoint_dir, "trainer_state.json")
+        if os.path.exists(state_file):
+            with open(state_file, "r") as f:
+                state = json.load(f)
+                # Look at the last entry in the log history for this checkpoint
+                if state["log_history"] and "eval_accuracy" in state["log_history"][-1]:
+                    accuracy = state["log_history"][-1]["eval_accuracy"]
+                    print(f"Checkpoint {checkpoint_dir}: accuracy = {accuracy}")
+                    if accuracy > best_accuracy:
+                        best_accuracy = accuracy
+                        best_checkpoint = checkpoint_dir
+
+    if best_checkpoint:
+        print(f"\nBest checkpoint: {best_checkpoint}")
+        print(f"Best accuracy: {best_accuracy}")
+    else:
+        print("No valid checkpoints found with evaluation metrics.")
+
+
+def get_label_id_dict(dataset_root_path: pathlib.Path):
     all_video_file_paths = (
         list(dataset_root_path.glob("train/*/*.avi"))
         + list(dataset_root_path.glob("val/*/*.avi"))
@@ -67,29 +110,9 @@ def main(train_new_model: bool, model_name: str, inference: bool, show_gif: bool
     label2id = {label: i for i, label in enumerate(class_labels)}
     id2label = {i: label for label, i in label2id.items()}
 
-    print(f"Unique class labels: {list(label2id.keys())}.")
+    print(f"Found unique class labels: {list(label2id.keys())}.")
 
-    model_checkpoint = "MCG-NJU/videomae-base"  # Huggingface videomae as base model
-    image_processor, model = load_model(model_checkpoint, label2id, id2label)
-    train_ds, val_ds, test_ds = get_datasets(image_processor, model, dataset_root_path)
-
-    if train_new_model:
-        print("Start training new model...")
-        train_results = train_model(
-            model, image_processor, model_name, train_ds, val_ds
-        )
-
-    if inference:
-        print("Start running inference...")
-        run_inference(
-            model_name=model_name,
-            test_dataset=test_ds,
-            show_gif=show_gif,
-            gif_mean=image_processor.image_mean,
-            gif_std=image_processor.image_std,
-            dataset_root_path=dataset_root_path,
-            id2label=id2label,
-        )
+    return label2id, id2label
 
 
 def download_hf_dataset() -> str:
@@ -141,36 +164,6 @@ def train_model(
     )
 
     return trainer.train()
-
-
-def run_inference(
-    model_name: str,
-    test_dataset: LabeledVideoDataset,
-    show_gif: bool,
-    gif_mean: float,
-    gif_std: float,
-    dataset_root_path: str,
-    id2label: dict[int, str],
-):
-    video_classifier = pipeline(model=model_name, task="video-classification", device=0)
-
-    for idx, sample_video in enumerate(test_dataset):
-        print(f"Processing video {idx + 1} / {test_dataset.num_videos}")
-
-        if show_gif:
-            video_tensor = sample_video["video"]
-            display_gif(video_tensor, gif_mean, gif_std)
-
-        video_name = sample_video["video_name"]
-        video_label = id2label[sample_video["label"]]
-        video_path = os.path.join(dataset_root_path, "test", video_label, video_name)
-        inference_result = video_classifier(video_path)
-
-        success = inference_result[0]["label"] == video_label
-        printColor = "\033[94m" if success else "\033[91m"
-        print(
-            f"{printColor}Inference result: {inference_result} on video {video_path} with actual label {video_label}"
-        )
 
 
 def compute_metrics(eval_pred):
@@ -307,92 +300,58 @@ def load_model(
     return image_processor, model
 
 
-def denormalize_img(img: ndarray, mean: float, std: float):
-    """
-    de-normalizes the image pixels.
-    """
-    img = (img * std) + mean
-    img = (img * 255).astype("uint8")
-    return img.clip(0, 255)
-
-
-def create_gif(
-    video_tensor: Tensor, mean: float, std: float, filename: str = "sample.gif"
-):
-    """
-    Prepares a GIF from a video tensor.
-    The video tensor is expected to have the following shape:
-    (num_frames, num_channels, height, width).
-    """
-    frames = []
-    for video_frame in video_tensor:
-        frame_unnormalized = denormalize_img(
-            video_frame.permute(1, 2, 0).numpy(), mean, std
-        )
-        frames.append(frame_unnormalized)
-
-    kargs = {"duration": 0.25}
-    imageio.mimsave(filename, frames, "GIF", **kargs)
-    return filename
-
-
-def display_gif(
-    video_tensor: Tensor, mean: float, std: float, gif_name: str = "sample.gif"
-):
-    """
-    Prepares and displays a GIF from a video tensor.
-    """
-    video_tensor = video_tensor.permute(1, 0, 2, 3)
-    gif_filename = create_gif(video_tensor, mean, std, gif_name)
-    gif = imageio.mimread(gif_filename)
-    fig, ax = plt.subplots()
-    im = ax.imshow(gif[0])
-    ax.axis("off")
-
-    def update(frame):
-        im.set_array(gif[frame])
-        return [im]
-
-    anim = animation.FuncAnimation(
-        fig, update, frames=len(gif), interval=150, blit=True  # 150 ms between frames
-    )
-
-    plt.show()
-
-
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument(
-        "--train",
-        "-T",
-        type=bool,
-        action=BooleanOptionalAction,
-        help="Whether a new model (based on huggingface's videomae base model) should be trained or not",
-    )
     parser.add_argument(
         "--name",
         "-N",
         type=str,
-        default="videomae-base-finetuned-ucf101-subset/checkpoint-740",
-        help="The name of the model. Will be used as the output directory when training a new model, or used to retrieve a pre-trained model from a directory with the same name in the project root",
+        default="videomae-base-finetuned-ucf101-subset",
+        help="The name of the model. Will be used as the output directory for checkpoints when training a new model",
     )
     parser.add_argument(
-        "--inference",
-        "-I",
+        "--base-model",
+        "-B",
+        type=str,
+        default="MCG-NJU/videomae-base",
+        help="The (huggingface) base model which will be used to train a new model using custom datasets.",
+    )
+    parser.add_argument(
+        "--hf-ucf101-subset",
+        "-H",
         type=bool,
         action=BooleanOptionalAction,
-        help="Whether inference should be done on a test set with either the provided model or the newly trained model",
+        help="Whether the UCF101 dataset should be used (and downloaded) from huggingface",
     )
     parser.add_argument(
-        "--demo",
+        "--dataset-path",
         "-D",
-        type=bool,
-        action=BooleanOptionalAction,
-        help="Whether a demo gif should be shown for each item being inferenced",
+        type=str,
+        help="The directory (residing in project root) that contains the custom dataset. Structure should like like [train|test|val]/[custom-label]/[*.avi]. This argument will be ignored when using the UCF101 subset",
+    )
+    parser.add_argument(
+        "--epochs",
+        "-E",
+        type=int,
+        default=20,
+        help="Maximum epoch count",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=8,
+        help="Training batch size",
     )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    main(args.train, args.name, args.inference, args.demo)
+    train(
+        args.name,
+        args.base_model,
+        args.hf_ucf101_subset,
+        args.dataset_path,
+        args.epochs,
+        args.batch_size,
+    )

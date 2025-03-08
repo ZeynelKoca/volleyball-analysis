@@ -1,8 +1,9 @@
-from argparse import ArgumentParser, BooleanOptionalAction
-import torch
 import gc
-from transformers import VideoMAEModel, VideoMAEForVideoClassification
 import time
+from argparse import ArgumentParser, BooleanOptionalAction
+
+import torch
+from transformers import VideoMAEForVideoClassification, VideoMAEModel
 
 
 def find_optimal_batch_size(
