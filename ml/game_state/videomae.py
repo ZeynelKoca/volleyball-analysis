@@ -7,7 +7,6 @@ from argparse import ArgumentParser, BooleanOptionalAction
 from enum import Enum
 
 import evaluate
-import imageio
 import numpy as np
 import pytorchvideo.data
 import torch
@@ -38,9 +37,10 @@ def train(
     model_name: str,
     base_model: str,
     use_hf_dataset: bool,
-    dataset_root_path: str | None,
+    dataset_root_path: pathlib.Path | None,
     epochs: int,
     batch_size: int,
+    file_extension: str
 ):
     if use_hf_dataset:
         dataset_path = download_hf_dataset()
@@ -54,13 +54,19 @@ def train(
     if dataset_root_path is None:
         print("No dataset path was set. Aborting...")
         return
+    
+    dataset_root_path = pathlib.Path(dataset_root_path)
 
-    label2id, id2label = get_label_id_dict(dataset_root_path)
+    label2id, id2label = get_label_id_dict(dataset_root_path, file_extension)
 
     image_processor, model = load_model(base_model, label2id, id2label)
     train_ds, val_ds, test_ds = get_datasets(image_processor, model, dataset_root_path)
 
     print("Start training new model...")
+    if torch.cuda.is_available():
+        curr_device = torch.cuda.current_device()
+        print(f"Using GPU [{torch.cuda.get_device_name(curr_device)}]")
+
     train_results = train_model(
         model=model,
         image_processor=image_processor,
@@ -98,11 +104,11 @@ def report_best_checkpoint(checkpoint_dirs: list[str]):
         print("No valid checkpoints found with evaluation metrics.")
 
 
-def get_label_id_dict(dataset_root_path: pathlib.Path):
+def get_label_id_dict(dataset_root_path: pathlib.Path, file_extension: str):
     all_video_file_paths = (
-        list(dataset_root_path.glob("train/*/*.avi"))
-        + list(dataset_root_path.glob("val/*/*.avi"))
-        + list(dataset_root_path.glob("test/*/*.avi"))
+        list(dataset_root_path.glob(f"train/*/*.{file_extension}"))
+        + list(dataset_root_path.glob(f"val/*/*.{file_extension}"))
+        + list(dataset_root_path.glob(f"test/*/*.{file_extension}"))
     )
 
     class_labels = sorted({str(path).split("/")[-2] for path in all_video_file_paths})
@@ -148,7 +154,6 @@ def train_model(
         load_best_model_at_end=True,
         use_cpu=False,
         fp16=True,  # Exponentially increases training speed on cuda gpu
-        dataloader_num_workers=8,  # uses more cpu cores for data loading
         metric_for_best_model="accuracy",
         max_steps=(training_dataset.num_videos // batch_size) * num_epochs,
     )
@@ -321,13 +326,13 @@ def parse_args():
         "-H",
         type=bool,
         action=BooleanOptionalAction,
-        help="Whether the UCF101 dataset should be used (and downloaded) from huggingface",
+        help="Whether the UCF101 dataset should be used (and downloaded) from huggingface. If not set, make sure to set --dataset-path",
     )
     parser.add_argument(
         "--dataset-path",
         "-D",
         type=str,
-        help="The directory (residing in project root) that contains the custom dataset. Structure should like like [train|test|val]/[custom-label]/[*.avi]. This argument will be ignored when using the UCF101 subset",
+        help="The directory (residing in project root) that contains the custom dataset. Structure should like like [train|test|val]/[custom-label]/[*.avi]. This argument will be ignored when using --hf-ucf101-subset",
     )
     parser.add_argument(
         "--epochs",
@@ -342,6 +347,13 @@ def parse_args():
         default=8,
         help="Training batch size",
     )
+    parser.add_argument(
+        "--video-extension",
+        "-V",
+        type=str,
+        default="avi",
+        help="The file extension of the videos in the dataset",
+    )
     return parser.parse_args()
 
 
@@ -354,4 +366,5 @@ if __name__ == "__main__":
         args.dataset_path,
         args.epochs,
         args.batch_size,
+        args.video_extension
     )

@@ -19,10 +19,10 @@ def run_inference(
     show_gif: bool,
     gif_mean: float,
     gif_std: float,
-    dataset_root_path: str,
+    testset_root_path: str,
     id2label: dict[int, str],
 ):
-    video_classifier = pipeline(model=model_name, task="video-classification", device=0)
+    video_classifier = pipeline(model=model_name, task="video-classification", device=0, use_fast=True)
 
     for idx, sample_video in enumerate(test_dataset):
         print(f"Processing video {idx + 1} / {test_dataset.num_videos}")
@@ -33,7 +33,7 @@ def run_inference(
 
         video_name = sample_video["video_name"]
         video_label = id2label[sample_video["label"]]
-        video_path = os.path.join(dataset_root_path, "test", video_label, video_name)
+        video_path = os.path.join(testset_root_path, "test", video_label, video_name)
         inference_result = video_classifier(video_path)
 
         success = inference_result[0]["label"] == video_label
@@ -41,35 +41,6 @@ def run_inference(
         print(
             f"{printColor}Inference result: {inference_result} on video {video_path} with actual label {video_label}"
         )
-
-
-def denormalize_img(img: ndarray, mean: float, std: float):
-    """
-    de-normalizes the image pixels.
-    """
-    img = (img * std) + mean
-    img = (img * 255).astype("uint8")
-    return img.clip(0, 255)
-
-
-def create_gif(
-    video_tensor: Tensor, mean: float, std: float, filename: str = "sample.gif"
-):
-    """
-    Prepares a GIF from a video tensor.
-    The video tensor is expected to have the following shape:
-    (num_frames, num_channels, height, width).
-    """
-    frames = []
-    for video_frame in video_tensor:
-        frame_unnormalized = denormalize_img(
-            video_frame.permute(1, 2, 0).numpy(), mean, std
-        )
-        frames.append(frame_unnormalized)
-
-    kargs = {"duration": 0.25}
-    imageio.mimsave(filename, frames, "GIF", **kargs)
-    return filename
 
 
 def display_gif(
@@ -94,6 +65,35 @@ def display_gif(
     )
 
     plt.show()
+
+
+def create_gif(
+    video_tensor: Tensor, mean: float, std: float, filename: str = "sample.gif"
+):
+    """
+    Prepares a GIF from a video tensor.
+    The video tensor is expected to have the following shape:
+    (num_frames, num_channels, height, width).
+    """
+    frames = []
+    for video_frame in video_tensor:
+        frame_unnormalized = denormalize_img(
+            video_frame.permute(1, 2, 0).numpy(), mean, std
+        )
+        frames.append(frame_unnormalized)
+
+    kargs = {"duration": 0.25}
+    imageio.mimsave(filename, frames, "GIF", **kargs)
+    return filename
+
+
+def denormalize_img(img: ndarray, mean: float, std: float):
+    """
+    de-normalizes the image pixels.
+    """
+    img = (img * std) + mean
+    img = (img * 255).astype("uint8")
+    return img.clip(0, 255)
 
 
 def parse_args():
@@ -124,7 +124,9 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    label2id, id2label = get_label_id_dict(pathlib.Path(args.test_root_path))
+    label2id, id2label = get_label_id_dict(pathlib.Path(args.test_root_path), "mp4")
+    #label2id = {"no-game": 1, "rally":2, "serve":3}
+    #id2label = {1: "no-game", 2: "rally", 3: "serve"}
     image_processor, model = load_model(args.model_path, label2id, id2label)
     _, _, test_ds = get_datasets(image_processor, model, args.test_root_path)
 
@@ -134,6 +136,6 @@ if __name__ == "__main__":
         show_gif=args.demo,
         gif_mean=image_processor.image_mean,
         gif_std=image_processor.image_std,
-        dataset_root_path=args.test_root_path,
+        testset_root_path=args.test_root_path,
         id2label=id2label,
     )
