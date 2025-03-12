@@ -233,7 +233,7 @@ def get_datasets(
         (height, width),
         num_frames_to_sample,
         dataset_root_path,
-        clip_duration,
+        1000,
     )
     print(f"Created evaluation dataset with {test_dataset.num_videos} videos")
 
@@ -277,12 +277,23 @@ def create_dataset(
         ]
     )
 
-    sampling_type_name = "random" if type == Dataset.TRAIN else "uniform"
+    if type == Dataset.EVALUATE:
+        # Use constant sampler with 1 clip per video
+        clip_sampler = pytorchvideo.data.make_clip_sampler(
+            "constant_clips_per_video",
+            clip_duration,
+            1 # Clips per video
+        )
+    else:
+        sampling_type_name = "random" if type == Dataset.TRAIN else "uniform"
+        clip_sampler = pytorchvideo.data.make_clip_sampler(
+            sampling_type_name,
+            clip_duration
+        )
+
     dataset = pytorchvideo.data.Ucf101(
         data_path=os.path.join(dataset_root_path, type.value),
-        clip_sampler=pytorchvideo.data.make_clip_sampler(
-            sampling_type_name, clip_duration
-        ),
+        clip_sampler=clip_sampler,
         decode_audio=False,
         transform=dataset_transform,
     )

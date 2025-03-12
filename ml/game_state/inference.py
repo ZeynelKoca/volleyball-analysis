@@ -27,8 +27,9 @@ def run_inference(
     for idx, sample_video in enumerate(test_dataset):
         print(f"Processing video {idx + 1} / {test_dataset.num_videos}")
 
+        video_tensor = sample_video["video"].permute(1, 0, 2, 3) 
+
         if show_gif:
-            video_tensor = sample_video["video"]
             display_gif(video_tensor, gif_mean, gif_std)
 
         video_name = sample_video["video_name"]
@@ -39,7 +40,7 @@ def run_inference(
         success = inference_result[0]["label"] == video_label
         printColor = "\033[94m" if success else "\033[91m"
         print(
-            f"{printColor}Inference result: {inference_result} on video {video_path} with actual label {video_label}"
+            f"{printColor}Inference result: {inference_result} on video {video_path} with actual label {video_label}'\033[0m'"
         )
 
 
@@ -49,7 +50,6 @@ def display_gif(
     """
     Prepares and displays a GIF from a video tensor.
     """
-    video_tensor = video_tensor.permute(1, 0, 2, 3)
     gif_filename = create_gif(video_tensor, mean, std, gif_name)
     gif = imageio.mimread(gif_filename)
     fig, ax = plt.subplots()
