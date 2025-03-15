@@ -2,14 +2,10 @@ import os
 import pathlib
 from argparse import ArgumentParser, BooleanOptionalAction
 
-import imageio
-from matplotlib import animation
-from matplotlib import pyplot as plt
-from numpy import ndarray
 from pytorchvideo.data.labeled_video_dataset import LabeledVideoDataset
-from torch import Tensor
 from transformers import pipeline
 
+from ml.game_state.utils.display_gif import display_gif
 from ml.game_state.videomae import get_datasets, get_label_id_dict, load_model
 
 
@@ -27,7 +23,7 @@ def run_inference(
     for idx, sample_video in enumerate(test_dataset):
         print(f"Processing video {idx + 1} / {test_dataset.num_videos}")
 
-        video_tensor = sample_video["video"].permute(1, 0, 2, 3) 
+        video_tensor = sample_video["video"].permute(1, 0, 2, 3)
 
         if show_gif:
             display_gif(video_tensor, gif_mean, gif_std)
@@ -42,58 +38,6 @@ def run_inference(
         print(
             f"{printColor}Inference result: {inference_result} on video {video_path} with actual label {video_label}'\033[0m'"
         )
-
-
-def display_gif(
-    video_tensor: Tensor, mean: float, std: float, gif_name: str = "sample.gif"
-):
-    """
-    Prepares and displays a GIF from a video tensor.
-    """
-    gif_filename = create_gif(video_tensor, mean, std, gif_name)
-    gif = imageio.mimread(gif_filename)
-    fig, ax = plt.subplots()
-    im = ax.imshow(gif[0])
-    ax.axis("off")
-
-    def update(frame):
-        im.set_array(gif[frame])
-        return [im]
-
-    anim = animation.FuncAnimation(
-        fig, update, frames=len(gif), interval=150, blit=True  # 150 ms between frames
-    )
-
-    plt.show()
-
-
-def create_gif(
-    video_tensor: Tensor, mean: float, std: float, filename: str = "sample.gif"
-):
-    """
-    Prepares a GIF from a video tensor.
-    The video tensor is expected to have the following shape:
-    (num_frames, num_channels, height, width).
-    """
-    frames = []
-    for video_frame in video_tensor:
-        frame_unnormalized = denormalize_img(
-            video_frame.permute(1, 2, 0).numpy(), mean, std
-        )
-        frames.append(frame_unnormalized)
-
-    kargs = {"duration": 0.25}
-    imageio.mimsave(filename, frames, "GIF", **kargs)
-    return filename
-
-
-def denormalize_img(img: ndarray, mean: float, std: float):
-    """
-    de-normalizes the image pixels.
-    """
-    img = (img * std) + mean
-    img = (img * 255).astype("uint8")
-    return img.clip(0, 255)
 
 
 def parse_args():

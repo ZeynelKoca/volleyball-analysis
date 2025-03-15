@@ -312,7 +312,10 @@ def load_model(
         label2id=label2id,
         id2label=id2label,
         ignore_mismatched_sizes=True,  # provide this in case you're planning to fine-tune an already fine-tuned checkpoint
-    ).to("cuda")
+    )
+    
+    if torch.cuda.is_available():
+        model.to("cuda")
 
     return image_processor, model
 
