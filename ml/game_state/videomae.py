@@ -77,6 +77,7 @@ def train(
         batch_size=batch_size,
     )
 
+    print(f"Training results: {train_results}")
     report_best_checkpoint(checkpoint_dirs=glob.glob(f"{model_name}/checkpoint-*"))
 
 
@@ -291,7 +292,7 @@ def create_dataset(
             clip_duration
         )
 
-    dataset = pytorchvideo.data.Ucf101(
+    dataset = pytorchvideo.data.labeled_video_dataset(
         data_path=os.path.join(dataset_root_path, type.value),
         clip_sampler=clip_sampler,
         decode_audio=False,
