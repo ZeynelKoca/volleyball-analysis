@@ -67,7 +67,7 @@ def train(
         curr_device = torch.cuda.current_device()
         print(f"Using GPU [{torch.cuda.get_device_name(curr_device)}]")
 
-    train_results = train_model(
+    trainer = create_trainer(
         model=model,
         image_processor=image_processor,
         new_model_name=model_name,
@@ -77,8 +77,13 @@ def train(
         batch_size=batch_size,
     )
 
+    train_results = trainer.train()
+
     print(f"Training results: {train_results}")
-    report_best_checkpoint(checkpoint_dirs=glob.glob(f"{model_name}/checkpoint-*"))
+    report_best_checkpoint(checkpoint_dirs=glob.glob(f"ml/output/videomae/{model_name}/checkpoint-*"))
+
+    trainer.save_model(f"ml/output/videomae/{model_name}/final")
+    print("Finished training and saving model")
 
 
 def report_best_checkpoint(checkpoint_dirs: list[str]):
@@ -132,7 +137,7 @@ def download_hf_dataset() -> str:
     )
 
 
-def train_model(
+def create_trainer(
     model: VideoMAEForVideoClassification,
     image_processor: VideoMAEImageProcessor,
     new_model_name: str,
@@ -142,7 +147,7 @@ def train_model(
     batch_size: int = 8,
 ):
     args = TrainingArguments(
-        output_dir=new_model_name,
+        output_dir=f"ml/output/videomae/{new_model_name}",
         remove_unused_columns=False,
         eval_strategy="epoch",
         save_strategy="epoch",
@@ -169,7 +174,7 @@ def train_model(
         data_collator=collate_fn,
     )
 
-    return trainer.train()
+    return trainer
 
 
 def compute_metrics(eval_pred):

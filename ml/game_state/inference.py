@@ -3,14 +3,15 @@ import pathlib
 from argparse import ArgumentParser, BooleanOptionalAction
 
 from pytorchvideo.data.labeled_video_dataset import LabeledVideoDataset
-from transformers import pipeline
+from transformers import (VideoMAEForVideoClassification,
+                          VideoMAEImageProcessor, pipeline)
 
 from ml.game_state.utils.display_gif import display_gif
 from ml.game_state.videomae import get_datasets, get_label_id_dict, load_model
 
 
 def run_inference(
-    model_name: str,
+    model_path: str,
     test_dataset: LabeledVideoDataset,
     show_gif: bool,
     gif_mean: float,
@@ -18,7 +19,9 @@ def run_inference(
     testset_root_path: str,
     id2label: dict[int, str],
 ):
-    video_classifier = pipeline(model=model_name, task="video-classification", device=0, use_fast=True)
+    model = VideoMAEForVideoClassification.from_pretrained(pretrained_model_name_or_path=model_path, local_files_only=True)
+    image_processor = VideoMAEImageProcessor.from_pretrained(pretrained_model_name_or_path=model_path, local_files_only=True)
+    video_classifier = pipeline(model=model, task="video-classification", device=0, use_fast=True, image_processor=image_processor)
 
     for idx, sample_video in enumerate(test_dataset):
         print(f"Processing video {idx + 1} / {test_dataset.num_videos}")
@@ -75,7 +78,7 @@ if __name__ == "__main__":
     _, _, test_ds = get_datasets(image_processor, model, args.test_root_path)
 
     run_inference(
-        model_name=args.model_path,
+        model_path=args.model_path,
         test_dataset=test_ds,
         show_gif=args.demo,
         gif_mean=image_processor.image_mean,
