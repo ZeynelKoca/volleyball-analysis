@@ -10,7 +10,7 @@ If using a `venv`: Add `[any-name].pth` in `venv/Lib` with content `../../..`
 
 ### Download unstructured video from youtube
 
-Following command downloads the highest available video quality. Requires yt-dlp and ffmpeg
+Following command downloads the highest available video quality. Requires [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [ffmpeg](https://www.ffmpeg.org/)
 
 ```bash
 yt-dlp -f "bestvideo+bestaudio/best" --merge-output-format mp4 https://www.youtube.com/URL-TO-VIDEO
