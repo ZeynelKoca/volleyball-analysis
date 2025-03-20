@@ -12,14 +12,19 @@ import pytorchvideo.data
 import torch
 from huggingface_hub import hf_hub_download
 from pytorchvideo.data.labeled_video_dataset import LabeledVideoDataset
-from pytorchvideo.transforms import (ApplyTransformToKey, Normalize,
-                                     RandomShortSideScale,
-                                     UniformTemporalSubsample)
-from torchvision.transforms import (Compose, Lambda, RandomCrop,
-                                    RandomHorizontalFlip)
-from transformers import (Trainer, TrainingArguments,
-                          VideoMAEForVideoClassification,
-                          VideoMAEImageProcessor)
+from pytorchvideo.transforms import (
+    ApplyTransformToKey,
+    Normalize,
+    RandomShortSideScale,
+    UniformTemporalSubsample,
+)
+from torchvision.transforms import Compose, Lambda, RandomCrop, RandomHorizontalFlip
+from transformers import (
+    Trainer,
+    TrainingArguments,
+    VideoMAEForVideoClassification,
+    VideoMAEImageProcessor,
+)
 
 from definitions import ROOT_DIR
 
@@ -40,7 +45,7 @@ def train(
     dataset_root_path: pathlib.Path | None,
     epochs: int,
     batch_size: int,
-    file_extension: str
+    file_extension: str,
 ):
     if use_hf_dataset:
         dataset_path = download_hf_dataset()
@@ -54,7 +59,7 @@ def train(
     if dataset_root_path is None:
         print("No dataset path was set. Aborting...")
         return
-    
+
     dataset_root_path = pathlib.Path(dataset_root_path)
 
     label2id, id2label = get_label_id_dict(dataset_root_path, file_extension)
@@ -80,7 +85,9 @@ def train(
     train_results = trainer.train()
 
     print(f"Training results: {train_results}")
-    report_best_checkpoint(checkpoint_dirs=glob.glob(f"ml/output/videomae/{model_name}/checkpoint-*"))
+    report_best_checkpoint(
+        checkpoint_dirs=glob.glob(f"ml/output/videomae/{model_name}/checkpoint-*")
+    )
 
     trainer.save_model(f"ml/output/videomae/{model_name}/final")
     print("Finished training and saving model")
@@ -286,15 +293,12 @@ def create_dataset(
     if type == Dataset.EVALUATE:
         # Use constant sampler with 1 clip per video
         clip_sampler = pytorchvideo.data.make_clip_sampler(
-            "constant_clips_per_video",
-            clip_duration,
-            1 # Clips per video
+            "constant_clips_per_video", clip_duration, 1  # Clips per video
         )
     else:
         sampling_type_name = "random" if type == Dataset.TRAIN else "uniform"
         clip_sampler = pytorchvideo.data.make_clip_sampler(
-            sampling_type_name,
-            clip_duration
+            sampling_type_name, clip_duration
         )
 
     dataset = pytorchvideo.data.labeled_video_dataset(
@@ -318,7 +322,7 @@ def load_model(
         id2label=id2label,
         ignore_mismatched_sizes=True,  # provide this in case you're planning to fine-tune an already fine-tuned checkpoint
     )
-    
+
     if torch.cuda.is_available():
         model.to("cuda")
 
@@ -386,5 +390,5 @@ if __name__ == "__main__":
         args.dataset_path,
         args.epochs,
         args.batch_size,
-        args.video_extension
+        args.video_extension,
     )

@@ -1,5 +1,6 @@
 import imageio
-from matplotlib import animation, pyplot as plt
+from matplotlib import animation
+from matplotlib import pyplot as plt
 from numpy import ndarray
 from torch import Tensor
 
