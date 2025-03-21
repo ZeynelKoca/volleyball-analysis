@@ -1,4 +1,4 @@
-import os
+import pathlib
 from argparse import ArgumentParser, BooleanOptionalAction
 
 import torch
@@ -12,8 +12,9 @@ from ml.game_state.videomae import get_datasets
 def run_inference(
     model_path: str,
     show_gif: bool,
-    testset_root_path: str,
+    dataset_root_path: str,
 ):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = VideoMAEForVideoClassification.from_pretrained(
         pretrained_model_name_or_path=model_path, local_files_only=True
@@ -21,8 +22,16 @@ def run_inference(
     image_processor = VideoMAEImageProcessor.from_pretrained(
         pretrained_model_name_or_path=model_path, local_files_only=True
     )
-    _, _, test_dataset = get_datasets(image_processor, model, testset_root_path)
 
+    model = model.to(device)
+
+    _, _, test_dataset = get_datasets(
+        image_processor, model, pathlib.Path(dataset_root_path), model.config.label2id
+    )
+
+    totalSuccess = 0
+    totalSkipped = 0
+    totalFailed = 0
     for idx, sample_video in enumerate(test_dataset):
         print(f"Processing video {idx + 1} / {test_dataset.num_videos}")
 
@@ -30,9 +39,8 @@ def run_inference(
 
         video_name = sample_video["video_name"]
         video_label = model.config.id2label[sample_video["label"]]
-        video_path = os.path.join(testset_root_path, "test", video_label, video_name)
         predicted_confidences, predicted_labels = __inference(
-            model=model, sample_video=sample_video
+            model=model, sample_video=sample_video, device=device
         )
 
         inference_result = [
@@ -51,12 +59,18 @@ def run_inference(
         ):
             # Deem the inference invalid if the top 2 results are too close in confidence
             success = False
+            totalSkipped += 1
             print(
-                f"\033[93m Could not confidently inference video {video_path} with actual label {video_label}. {printColor}Inference result was {inference_result}"
+                f"\033[93m Could not confidently inference video {video_name} with actual label {video_label}. {printColor}Inference result was {inference_result}"
             )
         else:
+            if success:
+                totalSuccess += 1
+            else:
+                totalFailed += 1
+
             print(
-                f"{printColor}Inference result: {inference_result} on video {video_path} with actual label {video_label}'\033[0m"
+                f"{printColor}Inference result: {inference_result} on video {video_name} with actual label {video_label}'\033[0m"
             )
 
         if show_gif:
@@ -64,8 +78,17 @@ def run_inference(
             gif_std = image_processor.image_std
             display_gif(video_tensor, gif_mean, gif_std)
 
+    print("Inference statistics:")
+    print(f"Skipped {totalSkipped} videos due to lack of confidence")
+    print(
+        f"Successfully classified {totalSuccess} / {test_dataset.num_videos - totalSkipped}"
+    )
+    print(
+        f"Incorrectly classified {totalFailed} / {test_dataset.num_videos - totalSkipped} high confidence"
+    )
 
-def __inference(model, sample_video):
+
+def __inference(model, sample_video, device):
     """Utility to run inference given a model and test video.
     The video is assumed to be preprocessed already.
     """
@@ -78,9 +101,7 @@ def __inference(model, sample_video):
         ),  # this can be skipped if you don't have labels available.
     }
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     inputs = {k: v.to(device) for k, v in inputs.items()}
-    model = model.to(device)
 
     # forward pass
     with torch.no_grad():
@@ -90,8 +111,12 @@ def __inference(model, sample_video):
         # Apply softmax to convert logits to probabilities
         results = F.softmax(logits, dim=1).squeeze(0)
 
+        topk = torch.topk(results, k=min(model.config.num_labels, len(results)))
+        confidences = topk.values.clone()
+        indices = topk.indices.clone()
+
     # Return all predicted label indices and respective confidences, ordered by highest confidence
-    return torch.topk(results, k=min(model.config.num_labels, len(results)))
+    return confidences, indices
 
 
 def parse_args():
@@ -111,10 +136,10 @@ def parse_args():
         help="Whether a demo gif should be shown for the item(s) being inferenced",
     )
     parser.add_argument(
-        "--test-root-path",
-        "-T",
+        "--dataset-path",
+        "-D",
         type=str,
-        help="The path to the directory containing all videos to be inferenced",
+        help="The directory (residing in project root) that contains the custom dataset. Directory should consist of sub-folders with label names, where video data resides",
     )
     return parser.parse_args()
 
@@ -124,6 +149,6 @@ if __name__ == "__main__":
 
     run_inference(
         model_path=args.model_path,
-        show_gif=args.demo,
-        testset_root_path=args.test_root_path,
+        show_gif=args.gif_demo,
+        dataset_root_path=args.dataset_path,
     )
