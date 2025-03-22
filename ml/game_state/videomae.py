@@ -68,7 +68,7 @@ def train(
 
     image_processor = VideoMAEImageProcessor.from_pretrained(base_model)
     model = load_model(base_model, label2id, id2label)
-    train_ds, val_ds, test_ds = get_datasets(
+    train_ds, val_ds, _ = get_datasets(
         image_processor, model, dataset_root_path, label2id
     )
 
@@ -293,7 +293,7 @@ def get_datasets(
         std,
         (height, width),
         num_frames_to_sample,
-        1000,
+        clip_duration,
     )
     print(f"Created evaluation dataset with {test_dataset.num_videos} videos")
 
