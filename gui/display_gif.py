@@ -35,7 +35,6 @@ def display_gif(
         # Permute to put channels in the second dimension
         # e.g., if shape is [C, T, H, W], permute to [T, C, H, W]
         if channel_dim == 0:
-            print("Permuting from [C, T, H, W] to [T, C, H, W]")
             frames = frames.permute(1, 0, 2, 3)
 
         # Add other cases if needed
