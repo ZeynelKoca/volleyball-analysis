@@ -23,3 +23,19 @@ def get_video_properties(video_path: str) -> Tuple[int, float, Tuple[int, int], 
     cap.release()
 
     return total_frames, fps, (height, width), duration
+
+
+def format_time(seconds: float) -> str:
+    """
+    Format time in seconds to a human-readable string.
+    """
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        seconds = seconds % 60
+        return f"{minutes}m {seconds:.0f}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        return f"{hours}h {minutes}m"

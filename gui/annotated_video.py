@@ -7,7 +7,7 @@ import torch
 from PIL import Image, ImageDraw, ImageFont
 
 from ml.game_state.inference_result import InferenceResult
-from ml.game_state.utils.video_utils import get_video_properties
+from ml.utils.video_utils import get_video_properties
 
 
 def create_annotated_video(

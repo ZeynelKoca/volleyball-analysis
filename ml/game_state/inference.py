@@ -13,8 +13,8 @@ from transformers import VideoMAEForVideoClassification, VideoMAEImageProcessor
 from gui.annotated_video import create_annotated_video, create_kpi_timeline
 from gui.display_gif import display_gif
 from ml.game_state.inference_result import InferenceResult
-from ml.game_state.utils.video_utils import get_video_properties
 from ml.game_state.videomae import get_datasets
+from ml.utils.video_utils import get_video_properties
 
 
 def load_model(
