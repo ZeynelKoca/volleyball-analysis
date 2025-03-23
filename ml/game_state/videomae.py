@@ -170,7 +170,7 @@ def create_trainer(
         lr_scheduler_type="cosine",  # Often works better than linear
         logging_steps=10,
         load_best_model_at_end=True,
-        use_cpu=torch.cuda.is_available(),
+        use_cpu=not torch.cuda.is_available(),
         fp16=torch.cuda.is_available(),  # Exponentially increases training speed on cuda gpu
         metric_for_best_model="accuracy",
         max_steps=(training_dataset.num_videos // batch_size) * num_epochs,

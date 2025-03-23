@@ -1,6 +1,7 @@
 import gc
 import os
 import pathlib
+import time
 from argparse import ArgumentParser, BooleanOptionalAction
 from typing import Any, Dict, List, Tuple
 
@@ -8,13 +9,14 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
+from progress.bar import ChargingBar
 from transformers import VideoMAEForVideoClassification, VideoMAEImageProcessor
 
 from gui.annotated_video import create_annotated_video, create_kpi_timeline
 from gui.display_gif import display_gif
 from ml.game_state.inference_result import InferenceResult
 from ml.game_state.videomae import get_datasets
-from ml.utils.video_utils import get_video_properties
+from ml.utils.file_utils import format_time, get_video_properties, open_file
 
 
 def load_model(
@@ -22,7 +24,9 @@ def load_model(
 ) -> tuple[VideoMAEForVideoClassification, VideoMAEImageProcessor]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    print(f"Loading model from {model_path}")
+    print(f"Loading model from {model_path}...")
+
+    start_time = time.time()
 
     model = VideoMAEForVideoClassification.from_pretrained(
         pretrained_model_name_or_path=model_path, local_files_only=True
@@ -34,7 +38,11 @@ def load_model(
     )
 
     model = model.to(device)
-    print(f"Model loaded with {sum(p.numel() for p in model.parameters())} parameters")
+
+    elapsed = time.time() - start_time
+    print(
+        f"Model loaded in {format_time(elapsed)} with {sum(p.numel() for p in model.parameters())} parameters"
+    )
     print(f"Number of classes: {model.config.num_labels}")
 
     return model, image_processor
@@ -43,14 +51,6 @@ def load_model(
 def extract_frames(video_path: str, start_frame: int, num_frames: int) -> np.ndarray:
     """
     Extract a specific range of frames from a video file.
-
-    Args:
-        video_path: Path to the video file
-        start_frame: Starting frame index
-        num_frames: Number of frames to extract
-
-    Returns:
-        Numpy array of frames with shape [num_frames, height, width, channels]
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -78,13 +78,6 @@ def extract_frames(video_path: str, start_frame: int, num_frames: int) -> np.nda
 def preprocess_frames(frames: np.ndarray, num_frames_required: int) -> torch.Tensor:
     """
     Preprocess a set of frames for the model.
-
-    Args:
-        frames: Numpy array of frames with shape [n, height, width, channels]
-        num_frames_required: Number of frames required by the model
-
-    Returns:
-        Tensor of preprocessed frames
     """
     if len(frames) == 0:
         return None
@@ -133,8 +126,8 @@ def inference(
         k = min(model.config.num_labels, len(probs))
         topk = torch.topk(probs, k=k)
 
-        confidences = topk.values.cpu().clone()
-        indices = topk.indices.cpu().clone()
+        confidences = topk.values.cpu()
+        indices = topk.indices.cpu()
 
     return confidences, indices
 
@@ -153,7 +146,9 @@ def run_chunked_video_inference(
         return []
 
     model, image_processor = load_model(model_path=model_path)
+    start_inference_time = time.time()
 
+    print(f"Analyzing video: {video_path}")
     # Use OpenCV to get video properties without loading the entire file
     total_frames, fps, dimensions, video_duration = get_video_properties(video_path)
 
@@ -171,6 +166,11 @@ def run_chunked_video_inference(
         f"Processing in {num_chunks} chunks of {chunk_duration} seconds ({frames_per_chunk} frames per chunk)"
     )
 
+    progressBar = ChargingBar(
+        "Processing video:",
+        max=num_chunks,
+    )
+
     results = []
 
     for i in range(0, num_chunks):
@@ -183,20 +183,24 @@ def run_chunked_video_inference(
         start_time = start_frame / fps
         end_time = end_frame / fps
 
-        print(
-            f"\nProcessing chunk {i+1}/{num_chunks} (frames {start_frame}-{end_frame-1}, {start_time:.2f}s-{end_time:.2f}s)"
+        progressBar.suffix = (
+            "%(index)d/%(max)d chunks | "
+            + f"({start_time:.2f}s-{end_time:.2f}s)"
+            + " | ETA: %(eta)ds "
         )
+        progressBar.next()
 
+        # Extract only the frames for this chunk using OpenCV
         chunk_frames = extract_frames(video_path, start_frame, end_frame - start_frame)
 
         if len(chunk_frames) == 0:
-            print(f"Warning: Could not extract frames for chunk {i+1}")
+            print(f"\nWarning: Could not extract frames for chunk {i+1}")
             continue
 
         processed_chunk = preprocess_frames(chunk_frames, model.config.num_frames)
 
         if processed_chunk is None:
-            print(f"Warning: Failed to preprocess frames for chunk {i+1}")
+            print(f"\nWarning: Failed to preprocess frames for chunk {i+1}")
             continue
 
         inputs = image_processor(
@@ -218,8 +222,6 @@ def run_chunked_video_inference(
         )
         results.append(result)
 
-        result.print_results()
-
         if show_gif:
             try:
                 video_tensor = inputs["pixel_values"].squeeze(0).permute(1, 0, 2, 3)
@@ -227,7 +229,7 @@ def run_chunked_video_inference(
                     video_tensor, image_processor.image_mean, image_processor.image_std
                 )
             except Exception as e:
-                print(f"Failed to display GIF: {e}")
+                print(f"\nFailed to display GIF: {e}")
 
         # Clean up memory
         del chunk_frames
@@ -237,17 +239,23 @@ def run_chunked_video_inference(
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    progressBar.finish()
+    elapsed = time.time() - start_inference_time
+
     print("\n" + "=" * 75)
     print(f"Video Analysis Summary for {video_path}")
     print("=" * 75)
-    print(f"Processed {len(results)} chunks of {chunk_duration}s each")
+    print(
+        f"Processed {len(results)} chunks of {chunk_duration}s each in {format_time(elapsed)}"
+    )
 
     print("\nTimeline of detected game states:")
     for result in results:
-        timestamp = result.timestamp
-        state = result.top_prediction.label
-        confidence = result.top_prediction.confidence
-        print(f"{timestamp:6.2f}s - {state:15s} ({confidence*100:.1f}%)")
+        if result.top_prediction:
+            timestamp = result.timestamp
+            state = result.top_prediction.label
+            confidence = result.top_prediction.confidence
+            print(f"{timestamp:6.2f}s - {state:15s} ({confidence*100:.1f}%)")
 
     return results
 
@@ -265,6 +273,10 @@ def run_video_inference(
     model, image_processor = load_model(model_path=model_path)
 
     total_frames, fps, dimensions, duration = get_video_properties(video_path)
+    print(f"Video info: {total_frames} frames, {fps:.2f} FPS, {duration:.2f}s")
+
+    print("Processing video...")
+    start_time = time.time()
 
     frames_to_extract = min(total_frames, model.config.num_frames * 3)
 
@@ -277,6 +289,13 @@ def run_video_inference(
     else:
         step = 1
         start_frame = 0
+
+    print(f"Extracting {frames_to_extract} frames from video...")
+    progressBar = ChargingBar(
+        "Reading frames:",
+        suffix="(%(index)d/%(max)d frames | ETA: %(eta)d",
+        max=frames_to_extract,
+    )
 
     cap = cv2.VideoCapture(video_path)
     frames = []
@@ -294,6 +313,9 @@ def run_video_inference(
         for _ in range(step - 1):
             cap.read()
 
+        progressBar.next()
+
+    progressBar.finish()
     cap.release()
 
     if not frames:
@@ -315,6 +337,9 @@ def run_video_inference(
     result = InferenceResult.from_model_outputs(
         model=model, confidences=confidences, indices=indices, video_name=video_path
     )
+
+    elapsed = time.time() - start_time
+    print(f"Inference completed in {format_time(elapsed)}")
     result.print_results()
 
     if show_gif:
@@ -346,9 +371,13 @@ def run_dataset_inference(
     stats = {"success": 0, "skipped": 0, "failed": 0, "total": test_dataset.num_videos}
     results = []
 
-    for idx, sample_video in enumerate(test_dataset):
-        print(f"Processing video {idx + 1} / {test_dataset.num_videos}")
+    # Initialize progress bar
+    progressBar = ChargingBar(
+        "Processing dataset:",
+        max=test_dataset.num_videos,
+    )
 
+    for idx, sample_video in enumerate(test_dataset):
         video_tensor = sample_video["video"].permute(1, 0, 2, 3)
         video_name = sample_video["video_name"]
         true_label = model.config.id2label[sample_video["label"]]
@@ -371,12 +400,20 @@ def run_dataset_inference(
 
         if not is_valid:
             stats["skipped"] += 1
+            status = "SKIPPED"
         elif result.is_correct:
             stats["success"] += 1
+            status = "CORRECT"
         else:
             stats["failed"] += 1
+            status = "INCORRECT"
 
-        result.print_results()
+        progressBar.suffix = (
+            "Video %(index)d/%(max)d | "
+            + f"{status} - {result.top_prediction.label if result.top_prediction else 'None'}"
+            + " | ETA: %(eta)ds "
+        )
+        progressBar.next()
 
         if show_gif:
             display_gif(
@@ -389,6 +426,8 @@ def run_dataset_inference(
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    progressBar.finish()
 
     # Print summary statistics
     valid_count = stats["total"] - stats["skipped"]
@@ -459,6 +498,7 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    start_time = time.time()
     args = parse_args()
 
     if args.dataset_path is not None:
@@ -487,7 +527,14 @@ if __name__ == "__main__":
                     video_path=args.video_path, results=results
                 )
 
-                print(f"Created visualizations: {annotated_video}, {timeline_image}")
+                print(
+                    f"Created visualizations: [{annotated_video}], [{timeline_image}]"
+                )
+
+                # Small delay to make sure files are written to disk
+                time.sleep(1)
+                open_file(annotated_video)
+                open_file(timeline_image)
         else:
             result = run_video_inference(
                 model_path=args.model_path,
@@ -497,3 +544,6 @@ if __name__ == "__main__":
             print("Single video inference complete")
     else:
         print("Error: Either --dataset-path or --video-path must be provided")
+
+    total_time = time.time() - start_time
+    print(f"\nTotal execution time: {format_time(total_time)}")

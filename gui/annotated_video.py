@@ -1,13 +1,15 @@
 import gc
 import os
+import time
 from typing import List, Optional
 
 import cv2
 import torch
 from PIL import Image, ImageDraw, ImageFont
+from progress.bar import ChargingBar
 
 from ml.game_state.inference_result import InferenceResult
-from ml.utils.video_utils import get_video_properties
+from ml.utils.file_utils import format_time, get_video_properties
 
 
 def create_annotated_video(
@@ -39,6 +41,8 @@ def create_annotated_video(
     total_frames, fps, (height, width), duration = get_video_properties(video_path)
     print(f"Video: {total_frames} frames, {fps} FPS, {width}x{height}, {duration:.2f}s")
 
+    start_time = time.time()
+
     # Create a mapping of timestamps to predictions
     prediction_map = {}
     for result in results:
@@ -47,6 +51,11 @@ def create_annotated_video(
 
     # Get sorted timestamps
     timestamps = sorted(prediction_map.keys())
+
+    progressBar = ChargingBar(
+        "Creating annotated video:",
+        max=total_frames,
+    )
 
     # Open video for reading
     input_cap = cv2.VideoCapture(video_path)
@@ -62,7 +71,10 @@ def create_annotated_video(
         end_frame = min(start_frame + chunk_size, total_frames)
         frames_to_process = end_frame - start_frame
 
-        print(f"Processing frames {start_frame}-{end_frame} of {total_frames}")
+        progressBar.suffix = (
+            f"Frames {start_frame}-{end_frame-1}/{total_frames}" + " | ETA: %(eta)ds "
+        )
+        progressBar.next(chunk_size)
 
         # Set frame position
         input_cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
@@ -127,8 +139,10 @@ def create_annotated_video(
     # Release resources
     input_cap.release()
     output_writer.release()
+    progressBar.finish()
+    elapsed = time.time() - start_time
 
-    print(f"Annotated video created at {output_path}")
+    print(f"Annotated video created at [{output_path}] in {format_time(elapsed)}")
     return output_path
 
 
@@ -160,7 +174,9 @@ def create_kpi_timeline(
         return None
 
     if output_path is None:
-        output_path = f"{video_name}_timeline.png"
+        video_name = os.path.basename(video_name)
+        name, _ = os.path.splitext(video_name)
+        output_path = f"{name}_timeline.png"
 
     if video_name is None and valid_results[0].video_name:
         video_name = os.path.basename(valid_results[0].video_name)
@@ -447,5 +463,6 @@ def create_kpi_timeline(
                 )
 
     image.save(output_path)
-    print(f"Timeline image created at {output_path}")
+
+    print(f"Timeline image created at [{output_path}]")
     return output_path
